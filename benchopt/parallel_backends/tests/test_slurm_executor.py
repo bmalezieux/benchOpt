@@ -19,6 +19,7 @@ def dummy_slurm_config():
         "slurm_time": "00:10",
         "slurm_partition": "test_partition",
         "slurm_nodes": 1,
+        "slurm_python": "python",
         "slurm_additional_parameters": {
             "slurm_mem": "1000MB",
             "slurm_gres": "gpu:1",
@@ -43,6 +44,7 @@ def test_get_slurm_executor(dummy_slurm_config):
     with mocked_slurm(), temp_benchmark() as bench:
         executor = get_slurm_executor(bench, dummy_slurm_config)
     parameters = executor._executor.parameters
+    assert executor._executor.python == dummy_slurm_config["slurm_python"]
     assert parameters["time"] == dummy_slurm_config["slurm_time"]
     assert parameters["partition"] == dummy_slurm_config["slurm_partition"]
     assert parameters["nodes"] == dummy_slurm_config["slurm_nodes"]

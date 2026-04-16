@@ -21,8 +21,21 @@ def get_slurm_executor(benchmark, config, timeout=100):
         # Timeout is in second in benchopt
         config["slurm_time"] = f"00:{int(1.5 * timeout)}"
 
+    config = config.copy()
+
+    # These arguments belong to `submitit.SlurmExecutor.__init__` and cannot
+    # be passed to `update_parameters`.
+    slurm_executor_kwargs = {}
+    for arg_name in (
+        "slurm_python",
+        "slurm_max_num_timeout",
+        "slurm_max_pickle_size_gb",
+    ):
+        if arg_name in config:
+            slurm_executor_kwargs[arg_name] = config.pop(arg_name)
+
     slurm_folder = benchmark.get_slurm_folder()
-    executor = submitit.AutoExecutor(slurm_folder)
+    executor = submitit.AutoExecutor(slurm_folder, **slurm_executor_kwargs)
     executor.update_parameters(**config)
     return executor
 

@@ -242,7 +242,7 @@ def _set_cls_attr_from_ast(module_file, cls_name, ctx):
     for node in cls.body:
         if isinstance(node, ast.Assign):
             for target in node.targets:
-                if target.id in ["name", "requirements", "install_cmd"]:
+                if target.id in ["name", "requirements", "install_cmd", "install_script"]:
                     try:
                         ctx[target.id] = ast.literal_eval(node.value)
                     except Exception:
