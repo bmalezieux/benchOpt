@@ -10,6 +10,7 @@ from .callback import _Callback
 from .parallel_backends import check_parallel_config
 from .parallel_backends import parallel_run
 from .results import save_results
+from ._generate_runs import _get_all_runs
 from .utils.pdb_helpers import exception_handler
 from .utils.sys_info import get_sys_info
 from .utils.terminal_output import TerminalOutput
@@ -386,7 +387,8 @@ def _run_benchmark(benchmark, solvers=None, forced_solvers=None,
 
     # List all datasets, objective and solvers to run based on the filters
     # provided. Merge the solver_names and forced to run all necessary solvers.
-    all_runs = benchmark._get_all_runs(
+    all_runs = _get_all_runs(
+        benchmark,
         solvers, forced_solvers, datasets, objectives,
         terminal=terminal
     )
