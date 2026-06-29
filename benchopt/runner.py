@@ -269,12 +269,18 @@ def run_one_solver(benchmark, dataset, objective, solver, n_repetitions,
             **{f"p_solver_{k}": v for k, v in solver._parameters.items()},
             **{f"p_dataset_{k}": v for k, v in dataset._parameters.items()},
         }
+        run_key = (
+            meta['dataset_name'],
+            meta['objective_name'],
+            meta['solver_name'],
+        )
 
         stopping_criterion = solver._stopping_criterion.get_runner_instance(
             solver=solver,
             max_runs=max_runs,
             timeout=timeout / n_repetitions if timeout is not None else None,
             terminal=terminal,
+            run_key=run_key,
         )
 
         args_run_one_to_cvg = dict(
