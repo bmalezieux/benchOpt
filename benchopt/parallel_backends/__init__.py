@@ -16,7 +16,15 @@ def is_distributed_frontal():
     return _DISTRIBUTED_FRONTAL
 
 
-def parallel_run(benchmark, run, run_kwargs_generator, config, collect=False):
+def parallel_run(
+    benchmark, run, kwargs=None, all_runs=None, config=None, collect=False,
+    run_kwargs_generator=None
+):
+    if run_kwargs_generator is not None:
+        assert all_runs is None
+        all_runs = run_kwargs_generator
+    kwargs = kwargs or {}
+    all_runs = all_runs or []
     config = config or {}
     backend = config.pop('backend', 'loky')
     if collect:  # Collect should not run complicated parallelism
@@ -35,12 +43,12 @@ def parallel_run(benchmark, run, run_kwargs_generator, config, collect=False):
             from .dask_backend import check_dask_config
             config = check_dask_config(config)
         with parallel_config(backend, **config):
-            results_generator = Parallel(return_as="generator_unordered")(
-                delayed(run)(**run_kwargs)
-                for run_kwargs in run_kwargs_generator
+            results = Parallel()(
+                delayed(run)(**kwargs, **run_kwargs)
+                for run_kwargs in all_runs
             )
 
-    return results_generator
+    return results
 
 
 def check_parallel_config(parallel_config_file, n_jobs):

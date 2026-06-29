@@ -3,11 +3,12 @@ from contextlib import ExitStack
 try:
     import submitit
     from submitit.helpers import as_completed
+    from rich import progress
 except ImportError:
     raise ImportError(
         "To run benchopt with the submitit backend, please install "
         "the `submitit` package: `pip install benchopt[submitit]` or "
-        "`pip install submitit`."
+        "`pip install submitit rich`."
     )
 
 
@@ -95,44 +96,46 @@ def hashable_pytree(pytree):
 
 
 def run_on_slurm(
-    benchmark, slurm_config, run_one_solver, run_kwargs_generator
+    benchmark, slurm_config, run_one_solver, common_kwargs, all_runs
 ):
 
     executors = {}
     tasks = []
 
     with ExitStack() as stack:
-        for kwargs in run_kwargs_generator:
+        for kwargs in all_runs:
             solver = kwargs.get("solver")
-            if solver is not None:
-                job_slurm_config = get_solver_slurm_config(
+            if solver is None:
+                solver_slurm_config = slurm_config
+            else:
+                solver_slurm_config = get_solver_slurm_config(
                     solver, slurm_config
                 )
-            else:
-                job_slurm_config = slurm_config
-            executor_config = hashable_pytree(job_slurm_config)
+            executor_config = hashable_pytree(solver_slurm_config)
 
             if executor_config not in executors:
                 executor = get_slurm_executor(
                     benchmark,
-                    job_slurm_config,
-                    timeout=kwargs.get("timeout"),
+                    solver_slurm_config,
+                    timeout=common_kwargs["timeout"],
                 )
                 stack.enter_context(executor.batch())
                 executors[executor_config] = executor
 
             future = executors[executor_config].submit(
-                run_one_solver, **kwargs
+                run_one_solver,
+                **common_kwargs,
+                **kwargs,
             )
             tasks.append(future)
 
-    # Yield results as jobs finish (unordered)
-    for t in as_completed(tasks):
+    print(f"First job id: {tasks[0].job_id}")
+
+    for t in progress.track(as_completed(tasks), total=len(tasks)):
         exc = t.exception()
         if exc is not None:
-            # Cancel remaining tasks and raise error
             for tt in tasks:
                 tt.cancel()
             raise exc
 
-        yield t.results()[0]
+    return [t.results()[0] for t in tasks]
