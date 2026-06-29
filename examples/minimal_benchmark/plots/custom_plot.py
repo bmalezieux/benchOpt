@@ -4,7 +4,7 @@ from benchopt import BasePlot
 class Plot(BasePlot):
     name = "Custom plot 1"
     type = "scatter"
-    dropdown = {
+    options = {
         "dataset": ...,  # Will fetch the dataset names from the df
         "color": ["blue", "red"]
     }
@@ -41,4 +41,5 @@ class Plot(BasePlot):
             "title": title,
             "xlabel": "Custom X-axis",
             "ylabel": "Custom Y-axis",
+            "scale": "linear"
         }

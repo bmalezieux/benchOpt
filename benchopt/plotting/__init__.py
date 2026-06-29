@@ -1,12 +1,15 @@
-import pandas as pd
+import warnings
 import matplotlib.pyplot as plt
 
 # helpers to manage metadata in the parquet files
-from ..utils.parquet import get_metadata
-from ..utils.parquet import update_metadata
+from ..results import read_results
+from ..results.parquet import get_metadata
+from ..results.parquet import update_metadata
 
 from .generate_html import plot_benchmark_html
 from .generate_matplotlib import get_figures
+
+from ..benchmark import Benchmark
 
 
 BACKWARD_COMPAT_PLOTS = {
@@ -14,22 +17,54 @@ BACKWARD_COMPAT_PLOTS = {
     "relative_suboptimality_curve": "objective_curve"
 }
 
+ALL_PLOT_OPTIONS = [
+    "plot_kind", "scale", "with_quantiles", "suboptimal_curve",
+    "relative_curve", "hidden_curves", "table_order", "table_hidden_columns",
+]
 
-def sanitize_options(options):
+
+def _sanitize_config(config):
     """Flatten a pytree into a list."""
-    if isinstance(options, (list, tuple)):
+    if isinstance(config, (list, tuple)):
         # Avoid duplicates while preserving order
         seen = set()
         return [
-            sanitize_options(item) for item in options
+            _sanitize_config(item) for item in config
             if item not in seen and not seen.add(item)
         ]
-    elif isinstance(options, dict):
+    elif isinstance(config, dict):
         return {
-            k: sanitize_options(v) for k, v in options.items()
+            k: _sanitize_config(v) for k, v in config.items()
         }
     else:
-        return BACKWARD_COMPAT_PLOTS.get(options, options)
+        return BACKWARD_COMPAT_PLOTS.get(config, config)
+
+
+def _check_view(name, view, plots):
+    all_options = ALL_PLOT_OPTIONS
+    all_kinds = [plot._get_name() for plot in plots]
+
+    kind = view.get("plot_kind")
+    if kind is None:
+        warnings.warn(f"View {name} has no 'plot_kind' specified.")
+    elif kind not in all_kinds:
+        warnings.warn(
+            f"View '{name}' has invalid plot_kind '{kind}'. "
+            "Valid kinds are:\n-" + "\n-".join(all_kinds)
+        )
+        return
+    else:
+        plot = next(plot for plot in plots if plot._get_name() == kind)
+        all_options += [f"{kind}_{p}" for p in plot.options]
+
+    all_options = set(all_options)
+    mismatched_options = set(view) - all_options
+    if mismatched_options:
+        warnings.warn(
+            f"View '{name}' has invalid options {mismatched_options} for "
+            f"plot_kind {kind}. Valid options are:\n-"
+            + "\n-".join(sorted(all_options))
+        )
 
 
 def plot_benchmark(fname, benchmark, kinds=None, display=True, plotly=False,
@@ -40,7 +75,7 @@ def plot_benchmark(fname, benchmark, kinds=None, display=True, plotly=False,
     ----------
     fname : str
         Name of the file in which the results are saved.
-    benchmark : benchopt.Benchmark object
+    benchmark : str or Path-like or benchopt.Benchmark object
         Object to represent the benchmark.
     kinds : list of str or None
         List of the plots that will be generated. If None are provided, use the
@@ -60,48 +95,47 @@ def plot_benchmark(fname, benchmark, kinds=None, display=True, plotly=False,
         The matplotlib figures for convergence curve and bar chart
         for each dataset.
     """
-    config = get_metadata(fname)
-    params = ["plots", "plot_configs"]
-    for param in params:
-        options = benchmark.get_setting(param, default_config=config)
-        if options is not None:
-            config[param] = sanitize_options(options)
-
-    update_metadata(fname, config)
+    benchmark = Benchmark(benchmark)
+    plot_config = get_metadata(fname)
+    plot_config = benchmark.get_plot_config(default_config=plot_config)
+    plot_config = _sanitize_config(plot_config)
+    update_metadata(fname, plot_config)
 
     if kinds is not None and len(kinds) > 0:
-        config["plots"] = kinds
+        plot_config["plots"] = kinds
 
-    valid_kinds = benchmark.get_plot_names()
+    plots = benchmark.get_plots()
+    valid_kinds = [plot._get_name() for plot in plots]
 
-    if "plots" not in config or config["plots"] is None:
-        config["plots"] = valid_kinds
+    if "plots" not in plot_config or plot_config["plots"] is None:
+        plot_config["plots"] = valid_kinds
+
+    for kind in plot_config["plots"]:
+        if kind not in valid_kinds:
+            raise ValueError(
+                f"Invalid plot kind '{kind}' specified in plot config. "
+                "This config is either set in the config.yml file in the "
+                "benchmark directory or in the {benchmark.name} section of "
+                "global benchopt config."
+                "Available kinds are:\n-" + "\n-".join(valid_kinds)
+            )
+
+    for name, view in plot_config.get("plot_configs", {}).items():
+        _check_view(name, view, plots)
 
     if html:
-        plot_benchmark_html(fname, benchmark, config, display)
+        plot_benchmark_html(fname, benchmark, plot_config, display)
 
     else:
         # Load the results.
-        if fname.suffix == '.parquet':
-            df = pd.read_parquet(fname)
-        else:
-            df = pd.read_csv(fname)
-        if "data_name" in df.columns:
-            df = df.rename(columns={"data_name": "dataset_name"})
+        df = read_results(fname)
 
         output_dir = benchmark.get_output_folder()
-
-        for kind in config["plots"]:
-            if kind not in valid_kinds:
-                raise ValueError(
-                    f"Invalid plot kind '{kind}'. Available kinds are: "
-                    f"{valid_kinds}"
-                )
 
         figs = []
 
         kind_figs = get_figures(
-            benchmark, df, output_dir, config["plots"]
+            benchmark, df, output_dir, plot_config["plots"]
         )
         figs.extend(kind_figs)
 

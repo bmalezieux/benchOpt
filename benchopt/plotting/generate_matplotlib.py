@@ -1,6 +1,10 @@
+import warnings
+import traceback
+
 import matplotlib.pyplot as plt
 import numpy as np
 
+from .image_utils import _is_array
 from .helpers import update_plot_data_style
 
 
@@ -25,6 +29,15 @@ def get_plot_figure(plot_datas, output_dir):
             fig = get_plot_barchart(plot_data)
         elif plot_data["type"] == "boxplot":
             fig = get_plot_boxplot(plot_data)
+        elif plot_data["type"] == "table":
+            warnings.warn(
+                f"Plot '{key}' (type 'table') cannot be "
+                f"rendered with matplotlib; skipping.",
+                UserWarning
+            )
+            continue
+        elif plot_data["type"] == "image":
+            fig = get_plot_image(plot_data)
         else:
             raise NotImplementedError(
                 f"Plot type {plot_data['type']} "
@@ -41,25 +54,46 @@ def get_plot_figure(plot_datas, output_dir):
 def get_plot_scatter(plot_data):
     fig = plt.figure()
     for curve_data in plot_data["data"]:
-        plt.loglog(
-            curve_data["x"], curve_data["y"], color=curve_data["color"],
-            marker=curve_data["marker"], label=curve_data["label"],
+        plt.plot(
+            curve_data["x"], curve_data["y"],
+            color=curve_data["color"],
+            marker=curve_data["marker"],
+            label=curve_data["label"],
             linewidth=3
         )
 
-        if "q1" in curve_data and "q9" in curve_data:
-            q1 = curve_data["q1"]
-            q9 = curve_data["q9"]
-            plt.fill_betweenx(
-                curve_data["y"], q1, q9, color=curve_data["color"],
+        if "y_low" in curve_data and "y_high" in curve_data:
+            y_low = curve_data["y_low"]
+            y_high = curve_data["y_high"]
+            plt.fill_between(
+                curve_data["x"], y_low, y_high,
+                color=curve_data["color"],
                 alpha=.3
             )
+        elif "x_low" in curve_data and "x_high" in curve_data:
+            x_low = curve_data["x_low"]
+            x_high = curve_data["x_high"]
+            plt.fill_betweenx(
+                curve_data["y"], x_low, x_high,
+                color=curve_data["color"],
+                alpha=.3
+            )
+
+    plot_scale = plot_data.get("scale", "loglog")
+    if plot_scale == "semilog-x":
+        plt.xscale("log")
+    elif plot_scale == "semilog-y":
+        plt.yscale("log")
+    elif plot_scale == "loglog":
+        plt.xscale("log")
+        plt.yscale("log")
 
     # Format the plot to be nice
     plt.legend(fontsize=14)
     plt.xlabel(plot_data["xlabel"], fontsize=14)
     plt.ylabel(plot_data["ylabel"], fontsize=14)
     plt.title(plot_data["title"], fontsize=14)
+    plt.grid(plot_data.get("grid", True), axis="both", ls="--", lw=0.5)
     plt.tight_layout()
 
     return fig
@@ -72,20 +106,18 @@ def get_plot_barchart(plot_data):
     width = 1 / (n_bars + 2)
     colors = []
 
-    height_list = []
-    times_list = []
+    val_list = []
 
     for i, bar_data in enumerate(plot_data["data"]):
         colors.append(bar_data["color"])
-        height_list.append(bar_data["y"])
-        times_list.append(bar_data["times"])
+        val_list.append(bar_data["y"])
 
     ax = fig.gca()
 
     for idx in range(n_bars):
-        no_cv = np.isnan(times_list[idx]).any()
+        no_cv = np.isnan(val_list[idx]).any()
         xi = (idx+1.5)*width
-        height = height_list[idx]
+        height = np.median(val_list[idx])
         edges = colors[idx] if not no_cv else "k"
         ax.bar(
             x=xi, height=height, width=width,
@@ -99,7 +131,7 @@ def get_plot_barchart(plot_data):
             )
         else:
             plt.scatter(
-                np.ones_like(times_list[idx]) * xi, times_list[idx],
+                np.ones_like(val_list[idx]) * xi, val_list[idx],
                 marker='_', color='k', zorder=10
             )
 
@@ -112,6 +144,7 @@ def get_plot_barchart(plot_data):
     ax.set_xlim(0, 1)
     ax.set_ylabel(plot_data["ylabel"])
     ax.set_title(plot_data["title"], fontsize=12)
+    plt.grid(plot_data.get("grid", True), axis="y", ls="--", lw=0.5)
     fig.tight_layout()
 
     return fig
@@ -119,6 +152,7 @@ def get_plot_barchart(plot_data):
 
 def get_plot_boxplot(plot_data):
     fig = plt.figure()
+    ax = fig.gca()
 
     # collect the union of all labels (x tick names)
     all_labels = []
@@ -134,8 +168,10 @@ def get_plot_boxplot(plot_data):
         boxplot = plt.boxplot(
             data["y"],
             positions=positions,
-            widths=0.6,           # you can keep this fixed
+            label=data["label"],
+            widths=plot_data.get("box_width", 0.6),
             patch_artist=True,
+            showfliers=plot_data.get("showfliers", False)
         )
 
         color = data["color"]
@@ -146,11 +182,73 @@ def get_plot_boxplot(plot_data):
             median.set(color=color, linewidth=1)
         for whisker in boxplot["whiskers"]:
             whisker.set(color=color, linewidth=1)
-        for flier in boxplot["fliers"]:
-            flier.set(color=color)
+        for cap in boxplot["caps"]:
+            cap.set(color=color, linewidth=1)
 
-    plt.xticks(range(len(all_labels)), all_labels, rotation=45)
-    plt.title(plot_data["title"])
-    plt.ylabel(plot_data["ylabel"])
+    ax.set_xticks(range(len(all_labels)), all_labels, rotation=45)
+    ax.set_title(plot_data["title"])
+    ax.set_ylabel(plot_data["ylabel"])
+    plt.grid(plot_data.get("grid", True), axis="y", ls="--", lw=0.5)
 
+    # Plot unique labels in the legend
+    handles, labels = ax.get_legend_handles_labels()
+    unique = {}
+    for handle, label in zip(handles, labels):
+        if label and label not in unique:
+            unique[label] = handle
+    if unique:
+        ax.legend(unique.values(), unique.keys())
+
+    fig.tight_layout()
+
+    return fig
+
+
+def get_plot_image(plot_data):
+    images = plot_data["data"]
+    n = len(images)
+    ncols = plot_data.get("ncols", min(n, 3))
+    nrows = max(1, (n + ncols - 1) // ncols)
+
+    fig, axes = plt.subplots(nrows, ncols, figsize=(4 * ncols, 4 * nrows),
+                             squeeze=False)
+
+    for idx, item in enumerate(images):
+        ax = axes[idx // ncols][idx % ncols]
+        ax.set_title(item.get("label", ""), fontsize=10)
+        ax.axis("off")
+
+        image = item.get("image")
+        # List of frames (animated sequence) → use last frame
+        if isinstance(image, list) and image and _is_array(image[0]):
+            arr = np.asarray(image[-1])
+        elif _is_array(image):
+            arr = np.asarray(image)
+        else:
+            arr = None
+        try:
+            if arr is not None:
+                arr = np.clip(arr, 0, 1)
+                cmap = "gray" if arr.ndim == 2 else None
+                ax.imshow(arr, cmap=cmap, vmin=0, vmax=1)
+            elif image is None:
+                ax.set_title("")  # Hide everything if no image provided
+            else:
+                raise ValueError(f"Incompatible image data: {type(image)}")
+        except Exception:
+            label = item.get("label", "No label").split("\n")[0]
+            print(f"\n\nError rendering image '{label}':\n")
+            traceback.print_exc()
+            ax.text(
+                0.5, 0.5, "Incompatible image data",
+                ha="center", va="center", fontsize=12
+            )
+            print('-' * 30 + "\n")
+
+    # Hide unused axes
+    for idx in range(n, nrows * ncols):
+        axes[idx // ncols][idx % ncols].axis("off")
+
+    fig.suptitle(plot_data.get("title", ""), fontsize=14)
+    fig.tight_layout()
     return fig

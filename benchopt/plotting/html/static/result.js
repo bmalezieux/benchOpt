@@ -30,12 +30,43 @@ const NON_CONVERGENT_COLOR = 'rgba(0.8627, 0.8627, 0.8627)'
  * @param {Object} partialState
  */
 const setState = (partialState) => {
+  const plotKindChanged = (
+    "plot_kind" in partialState && partialState.plot_kind !== window._state?.plot_kind
+  );
+
   window._state = {...state(), ...partialState};
 
+  // When changing chart type, apply the default scale defined by the plot data
+  if (plotKindChanged) {
+    const plotData = getPlotData();
+    if (plotData && "scale" in plotData) {
+      window._state.scale = plotData.scale;
+    }
+  }
+
   renderSidebar();
-  renderPlot();
-  renderLegend();
-}
+
+  /**
+   * Hide all containers for the different plots
+   */
+  ["table", "image", "plot", "plot_with_legend", "legend"].forEach(key => {
+    let container = document.getElementById(`${key}_container`);
+    hide(container);
+  });
+
+  if  (isChart('table')) {
+    renderTable();
+  } else {
+    // Pending table-view settings only apply to tables; drop them otherwise.
+    tablePendingView = null;
+    if (isChart('image')) {
+      renderImages();
+    } else {
+      renderPlot();
+    }
+  }
+
+};
 
 /**
  * Retrieve the state object from window._state
@@ -78,17 +109,24 @@ const config_mapping = {
  * Create/Update the plot.
  */
 const renderPlot = () => {
-  let div;
+
+  // Show and purge the container
+  let plot_container = document.getElementById('plot_container');
+  let plot_with_legend_container = document.getElementById('plot_with_legend_container');
+  Plotly.purge(plot_with_legend_container);
+  Plotly.purge(plot_container);
+  show(plot_container);
+
+  let div = plot_container;
   if (isChart('scatter')) {
-    div = document.getElementById('scatter_plot_container');
-  } else {
-    div = document.getElementById('plot_container');
+    show(plot_with_legend_container);
+    div = plot_with_legend_container;
+    renderLegend();
   }
+
+  // Render the plot with PlotlyJS
   const data = getChartData();
   const layout = getLayout();
-
-  Plotly.purge(document.getElementById('scatter_plot_container'));
-  Plotly.purge(document.getElementById('plot_container'));
   Plotly.react(div, data, layout);
 };
 
@@ -151,13 +189,14 @@ const getBarData = () => {
   getPlotData().data.forEach(curveData => {
     // Add times for each convergent bar
     // Check if text is not 'Did not converge'
-    if (curveData.text === '') {
-      let nbTimes = curveData.times.length
+    curveText = curveData.text || ''
+    if (curveText === '') {
+      let nbTimes = curveData.y.length
 
       barData.push({
         type: 'scatter',
         x: new Array(nbTimes).fill(curveData.label),
-        y: curveData.times,
+        y: curveData.y,
         marker: {
           color: 'black',
           symbol: 'line-ew-open'
@@ -197,7 +236,7 @@ const getPlotData = () => {
   let dropdowns = getPlotDropdowns();
   let dropdown_values = dropdowns.map(dropdown => state()[dropdown]);
   let data_key = [state().plot_kind, ...dropdown_values].join('_');
-  return window._custom_plots[state().plot_kind][data_key];
+  return window._plots[state().plot_kind][data_key];
 }
 
 
@@ -220,23 +259,19 @@ const getScatterData = () => {
   getPlotData().data.forEach(curveData => {
     label = curveData.label;
     y = curveData.y;
-    if ("q1" in curveData && "q9" in curveData && state().with_quantiles) {
-      q1 = curveData.q1;
-      q9 = curveData.q9;
+    if ("y_low" in curveData && "y_high" in curveData && state().with_quantiles) {
+      y_low = curveData.y_low;
+      y_high = curveData.y_high;
+    }
+    else if ("x_low" in curveData && "x_high" in curveData && state().with_quantiles) {
+      x_low = curveData.x_low;
+      x_high = curveData.x_high;
     }
     if (state().suboptimal_curve) {
       y = y.map(value => value - min_y);
-      if ("q1" in curveData && "q9" in curveData && state().with_quantiles) {
-        q1 = q1.map(value => value - min_y);
-        q9 = q9.map(value => value - min_y);
-      }
     }
     if (state().relative_curve) {
       y = y.map(value => value / (y[0] - min_y));
-      if ("q1" in curveData && "q9" in curveData && state().with_quantiles) {
-        q1 = q1.map(value => value / (y[0] - min_y));
-        q9 = q9.map(value => value / (y[0] - min_y));
-      }
     }
     curves.push({
       type: 'scatter',
@@ -251,25 +286,56 @@ const getScatterData = () => {
         color: curveData.color,
       },
       legendgroup: label,
-      hovertemplate: label + ' <br> (%{x:.1e},%{y:.1e}) <extra></extra>',
+      hovertemplate: label + ' <br> (%{x:.3e},%{y:.3e}) <extra></extra>',
       visible: isVisible(label) ? true : 'legendonly',
       x: curveData.x,
       y: y,
     });
 
-    if ("q1" in curveData && "q9" in curveData && state().with_quantiles) {
+
+    if ("y_low" in curveData && "y_high" in curveData && state().with_quantiles) {
       curves.push({
         type: 'scatter',
         mode: 'lines',
-        showlegend: false,
+        legend: false,
         line: {
           width: 0,
           color: curveData.color,
         },
         legendgroup: label,
-        hovertemplate: '(%{x:.1e},%{y:.1e}) <extra></extra>',
+        hovertemplate: '(%{x:.3e},%{y:.3e}) <extra></extra>',
         visible: isVisible(label) ? true : 'legendonly',
-        x: q1,
+        x: curveData.x,
+        y: y_low,
+      }, {
+        type: 'scatter',
+        mode: 'lines',
+        showlegend: false,
+        fill: 'tonextx',
+        line: {
+          width: 0,
+          color: curveData.color,
+        },
+        legendgroup: label,
+        hovertemplate: '(%{x:.3e},%{y:.3e}) <extra></extra>',
+        visible: isVisible(label) ? true : 'legendonly',
+        x: curveData.x,
+        y: y_high,
+      });
+    }
+    else if ("x_low" in curveData && "x_high" in curveData && state().with_quantiles) {
+      curves.push({
+        type: 'scatter',
+        mode: 'lines',
+        legend: false,
+        line: {
+          width: 0,
+          color: curveData.color,
+        },
+        legendgroup: label,
+        hovertemplate: '(%{x:.3e},%{y:.3e}) <extra></extra>',
+        visible: isVisible(label) ? true : 'legendonly',
+        x: x_low,
         y: y,
       }, {
         type: 'scatter',
@@ -281,9 +347,9 @@ const getScatterData = () => {
           color: curveData.color,
         },
         legendgroup: label,
-        hovertemplate: '(%{x:.1e},%{y:.1e}) <extra></extra>',
+        hovertemplate: '(%{x:.3e},%{y:.3e}) <extra></extra>',
         visible: isVisible(label) ? true : 'legendonly',
-        x: q9,
+        x: x_high,
         y: y,
       });
     }
@@ -337,7 +403,18 @@ const setConfig = (config_item) => {
     let update = {};
     // const lims = ['xlim', 'ylim', 'hidden_curves']
     const lims = ['hidden_curves']
+    let kind = state().plot_kind;
+    if ("plot_kind" in config) {
+      kind = config["plot_kind"];
+    }
+    // Table settings are applied by renderTable, not through the state.
+    tablePendingView = ('table_order' in config || 'table_hidden_columns' in config)
+      ? {order: config.table_order ?? null, hidden: config.table_hidden_columns ?? []}
+      : null;
     for(let key in config){
+      if (key === 'table_order' || key === 'table_hidden_columns') {
+        continue;
+      }
       const value = config[key];
       if (key in config_mapping) {
         if (config_mapping[key] !== '') {
@@ -346,16 +423,24 @@ const setConfig = (config_item) => {
         }
       }
       else {
+        // Custom parameters which should be related to the current kind
+        // and the div prefix is 'change_{kind}_'. Ignore otherwise with
+        // a warning in the console.
+        if (!key.startsWith(kind)) {
+          key = kind + "_" + key;
+        }
         div_key = "change_" + key;
-        document.getElementById(div_key).value = value;
+        try {
+          document.getElementById(div_key).value = value;
+        } catch (error) {
+          // Element not found, ignore
+          console.warn("Unknown config parameter: '" + key + "'");
+        }
       }
       update[key] = value;
     }
 
     setState(update);
-
-    // update the plot
-    renderPlot();
   }
 };
 
@@ -375,6 +460,15 @@ const saveView = () => {
   }
   for (let option of DEFAULT_CONFIG_OPTIONS) {
     config[option] = state()[option];
+  }
+
+  // Persist the table order and hidden columns when viewing a table.
+  if (isChart('table')) {
+    const order = getTableOrder();
+    if (order) {
+      config.table_order = order;
+    }
+    config.table_hidden_columns = [...tableHiddenColumns];
   }
 
   let noViewAvailableElement = document.getElementById('no_view_available');
@@ -438,6 +532,9 @@ const exportConfigs = () => {
       var value = config[key];
       if (key === 'xlim' || key === 'ylim')
         value = "[" + value + "]";
+      else if (value !== null && typeof value === 'object')
+        // Arrays/objects (e.g. table_order, hidden columns): JSON is valid YAML.
+        value = JSON.stringify(value);
       config_yaml += "    " + key + ": " + value + "\n";
     }
   }
@@ -478,13 +575,13 @@ const renderSidebar = () => {
  * Render Scale selector
  */
 const renderScaleSelector = () => {
-  if (isChart('bar_chart')) {
+  if (isChart(['table', 'image'])) {
     hide(document.querySelectorAll("#scale-form-group"));
   } else {
     show(document.querySelectorAll("#scale-form-group"), 'block');
   }
 
-  if (isChart('boxplot')) {
+  if (isChart(['boxplot', 'bar_chart'])) {
     hide(document.querySelectorAll(".other_plot_option"));
     show(document.querySelectorAll(".boxplot_option"));
   } else {
@@ -497,12 +594,17 @@ const renderScaleSelector = () => {
  * Render WithQuantile toggle
  */
 const renderWithQuantilesToggle = () => {
-  if (isChart('scatter')) {
+  if (isChart('scatter') && hasQuantiles()) {
     show(document.querySelectorAll("#change-shades-form-group"), 'flex');
   } else {
     hide(document.querySelectorAll("#change-shades-form-group"));
   }
 };
+
+// True if any curve in the current plot carries quantile bounds.
+const hasQuantiles = () => getPlotData().data.some(
+  c => ("y_low" in c && "y_high" in c) || ("x_low" in c && "x_high" in c)
+);
 
 const renderSuboptimalRelativeToggle = () => {
   if (isChart('scatter')) {
@@ -515,6 +617,16 @@ const renderSuboptimalRelativeToggle = () => {
 const renderPlotDropdowns = () => {
   hide(document.querySelectorAll(`[id$='-custom-params-container']`));
   show(document.querySelectorAll(`#${state().plot_kind}-custom-params-container`), 'block');
+  // Hide dropdowns with only one option
+  for (let dropdown of document.getElementsByTagName('select')) {
+    // Keep view selectors visible in the config container.
+    if (dropdown.closest('#config_container')) {
+      continue;
+    }
+    if (dropdown.options.length <= 1) {
+      hide(dropdown.parentElement.parentElement);
+    }
+  }
 
 }
 
@@ -547,7 +659,7 @@ const getPlotDropdowns = () => {
   let kind = state().plot_kind;
   let params = [];
   Object.keys(state()).forEach(key => {
-    if (key.includes(kind)) {
+    if (key.startsWith(kind)) {
       params.push(key);
     }
   });
@@ -562,7 +674,8 @@ const isChart = chart => {
   }
 
   let plot_kind = state().plot_kind;
-  if (!["bar_chart", "boxplot"].includes(plot_kind)) {
+  // If the plot kind is not a default one, check the type of the custom plot in the data.
+  if (!["bar_chart", "boxplot", "table", "scatter"].includes(plot_kind)) {
     let custom_data = getPlotData();
     plot_kind = custom_data.type;
   }
@@ -593,14 +706,25 @@ const isAvailable = () => {
   return !isNotAvailable;
 }
 
+const getMedian = (arr) => {
+  const sorted = [...arr].sort((a, b) => a - b);
+  let median = null;
+  if (sorted.length > 0) {
+    const mid = Math.floor(sorted.length / 2);
+    median = (sorted.length % 2 === 1) ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
+  }
+  return median;
+}
+
 const barDataToArrays = () => {
   const colors = [], texts = [], x = [], y = [];
 
   getPlotData().data.forEach(plotData => {
     x.push(plotData.label);
-    y.push(plotData.y);
-    colors.push(plotData.text === '' ? plotData.color : NON_CONVERGENT_COLOR);
-    texts.push(plotData.text);
+    y.push(getMedian(plotData.y));
+    const plotText = plotData.text || '';
+    colors.push(plotText === '' ? plotData.color : NON_CONVERGENT_COLOR);
+    texts.push(plotText);
   });
 
   return {x, y, colors, texts}
@@ -617,7 +741,7 @@ const _getScale = (scale) => {
         xaxis: 'log',
         yaxis: 'log',
       };
-    case 'log': // used for boxplot
+    case 'log': // used for boxplot or barchart
       return {
         xaxis: 'log',
         yaxis: 'log',
@@ -642,35 +766,54 @@ const _getScale = (scale) => {
   }
 }
 
+const MPL_AXIS = {
+  showline: true,
+  linecolor: 'black',
+  linewidth: 1,
+  mirror: true,
+  ticks: 'outside',
+  tickcolor: 'black',
+  gridcolor: '#d9d9d9',
+  griddash: 'dot',
+  gridwidth: 0.5,
+  zeroline: false,
+  automargin: true,
+};
+const MPL_LAYOUT = {
+  plot_bgcolor: 'white',
+  paper_bgcolor: 'white',
+  font: { family: 'DejaVu Sans, Arial, sans-serif', color: 'black' },
+};
+
 const getBarChartLayout = () => {
   let data = getPlotData();
   const layout = {
-    autosize: !isSmallScreen(),
+    autosize: true,
     modebar: {
       orientation: 'v',
     },
     yaxis: {
-      type: 'log',
+      ...MPL_AXIS,
+      type: getScale().yaxis,
       title: data["ylabel"],
-      tickformat: '.1e',
-      gridcolor: '#ffffff',
+      tickformat: '~g',
     },
     xaxis: {
+      ...MPL_AXIS,
       tickangle: -60,
       ticktext: Array(data.data.map(d => d.label)),
+      showgrid: false,  // X axis is text: no vertical gridlines
     },
     showlegend: false,
     title: data["title"],
-    plot_bgcolor: '#e5ecf6',
+    ...MPL_LAYOUT,
   };
 
   if (isSmallScreen()) {
-    layout.width = 900;
-    layout.height = window.screen.availHeight - 200;
     layout.dragmode = false;
   }
 
-  // TODO what does this do ??
+  // If no data available, plot "Not available"
   if (!isAvailable()) {
     layout.annotations = [{
       xref: 'paper',
@@ -690,29 +833,29 @@ const getBarChartLayout = () => {
 };
 
 const getBoxplotChartLayout = () => {
-  plot_info = getPlotData()
+  const plot_info = getPlotData()
   const layout = {
-    autosize: !isSmallScreen(),
+    autosize: true,
     modebar: {
       orientation: 'v',
     },
     yaxis: {
+      ...MPL_AXIS,
       type: getScale().yaxis,
       title: plot_info["ylabel"],
-      tickformat: '.1e',
-      gridcolor: '#ffffff',
+      tickformat: '~g',
     },
     xaxis: {
+      ...MPL_AXIS,
       tickangle: (typeof plot_info.data[0].x[0] === "string") ? -60 : 0,
+      showgrid: typeof plot_info.data[0].x[0] !== "string",  // hide vertical gridlines for text X axis
     },
     showlegend: false,
     title: plot_info["title"],
-    plot_bgcolor: '#e5ecf6',
+    ...MPL_LAYOUT,
   };
 
   if (isSmallScreen()) {
-    layout.width = 900;
-    layout.height = window.screen.availHeight - 200;
     layout.dragmode = false;
   }
 
@@ -724,11 +867,10 @@ const getScatterChartLayout = () => {
   let customData = getPlotData();
 
   const layout = {
-    autosize: !isSmallScreen(),
+    autosize: true,  // Let Plotly handle sizing; CSS controls aspect ratio and min-height
     modebar: {
       orientation: 'v',
     },
-    height: 700,
     showlegend: false,
     legend: {
       title: {
@@ -741,27 +883,23 @@ const getScatterChartLayout = () => {
       x: .5
     },
     xaxis: {
+      ...MPL_AXIS,
       type: getScale().xaxis,
       title: customData.xlabel,
-      tickformat: '.1e', // TODO adapt if xaxis is not numeric
-      tickangle: -45,
-      gridcolor: '#ffffff',
-      zeroline : false,
+      tickformat: '~g',
+      tickangle: 0,
     },
     yaxis: {
+      ...MPL_AXIS,
       type: getScale().yaxis,
       title: customData.ylabel,
-      tickformat: '.1e',
-      gridcolor: '#ffffff',
-      zeroline : false,
+      tickformat: '~g',
     },
     title: `${customData.title}`,
-    plot_bgcolor: '#e5ecf6',
+    ...MPL_LAYOUT,
   };
 
   if (isSmallScreen()) {
-    layout.width = 900;
-    layout.height = window.screen.availHeight - 200;
     layout.dragmode = false;
   }
 
@@ -803,7 +941,7 @@ const hide = HTMLElements => {
  * @param HTMLElements
  * @param style
  */
-const show = (HTMLElements, style = 'initial') => {
+const show = (HTMLElements, style = '') => {
   if (HTMLElements instanceof Element) {
     HTMLElements = [HTMLElements]
   }
@@ -866,6 +1004,412 @@ const handleCurveDoubleClick = curve => {
   hideAllCurvesExcept(curve);
 };
 
+
+/*
+ * ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+ * MANAGE IMAGE RENDERING
+ * ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+ */
+
+const renderImages = () => {
+
+  // Show and purge the container
+  let image_container = document.getElementById('image_container');
+  image_container.innerHTML = '';
+  show(image_container);
+
+  const plotData = getPlotData();
+  if (!plotData || !plotData.data || plotData.data.length === 0) {
+    image_container.innerHTML = '<div>No image data available</div>';
+    return;
+  }
+
+  // Title
+  if (plotData.title) {
+    const titleEl = document.createElement('h2');
+    titleEl.className = 'text-xl text-center text-gray-800 mb-6';
+    titleEl.innerText = plotData.title;
+    image_container.appendChild(titleEl);
+  }
+
+  const ncols = plotData.ncols || Math.min(plotData.data.length, 3);
+  const grid = document.createElement('div');
+  grid.className = `grid gap-6`;
+  grid.style.gridTemplateColumns = `repeat(${ncols}, minmax(0, 1fr))`;
+
+  plotData.data.forEach(imgData => {
+    const card = document.createElement('div');
+
+    if (imgData.image === null) {
+      // Empty invisible block for grid alignment
+      grid.appendChild(card);
+      return;
+    }
+
+    card.className = 'bg-white rounded-lg shadow border border-gray-200 p-2 flex flex-col gap-2';
+
+    const imgWrapper = document.createElement('div');
+    imgWrapper.className = 'bg-gray-50 flex items-center justify-center';
+    imgWrapper.style.aspectRatio = '1 / 1';
+
+    if (imgData.image === '__incompatible__') {
+      const msg = document.createElement('span');
+      msg.className = 'text-sm text-gray-500 italic';
+      msg.innerText = 'Incompatible image';
+      imgWrapper.appendChild(msg);
+    } else {
+      const img = document.createElement('img');
+      img.src = imgData.image;
+      img.alt = imgData.label || '';
+      img.className = 'block w-full h-full object-contain';
+      img.style.imageRendering = 'pixelated';
+      imgWrapper.appendChild(img);
+    }
+    card.appendChild(imgWrapper);
+
+    if (imgData.label) {
+      const labelEl = document.createElement('div');
+      labelEl.className = 'text-sm text-center text-gray-700';
+      labelEl.innerText = imgData.label;
+      card.appendChild(labelEl);
+    }
+
+    grid.appendChild(card);
+  });
+
+  image_container.appendChild(grid);
+};
+
+/*
+ * ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+ * MANAGE TABLE RENDERING
+ * ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+ */
+
+// Global state for precision
+let tableFloatPrecision = 4;
+
+// Grid.js instance for the table plot, keyed by the table identity so that
+// switching to another table rebuilds the grid (and resets its sorting),
+// while re-rendering the same table (e.g. on precision change) keeps the
+// user's current sorting.
+let tableGrid = null;
+let tableGridKey = null;
+
+// Columns of the current table hidden through the column toggles.
+let tableHiddenColumns = new Set();
+
+// Table settings (order + hidden columns) coming from a saved view, applied
+// once by the next renderTable build then cleared. Kept out of window._state
+// so they don't leak onto other tables shown via the dropdowns.
+let tablePendingView = null;
+
+// Order ({column, ascending}) the current table was built with, used as the
+// fallback when Grid.js reports a neutral sort (e.g. right after loading a
+// view), so re-saving the view keeps that order.
+let tableAppliedOrder = null;
+
+const valueToFixed = (value) => {
+  if (typeof value === 'number' && !Number.isInteger(value)) {
+    return value.toFixed(tableFloatPrecision);
+  }
+  return value;
+}
+
+/**
+ * Compare two cell values, handling both numbers and strings.
+ *
+ * The result must be -1/0/1, not a difference: Grid.js combines comparator
+ * results with a bitwise OR, which truncates fractional values to 0 and
+ * would make all close numbers compare as equal.
+ */
+const compareCells = (a, b) => {
+  if (typeof a === 'number' && typeof b === 'number') {
+    return a > b ? 1 : a < b ? -1 : 0;
+  }
+  return String(a).localeCompare(String(b));
+}
+
+const sortRows = (plotData, column, ascending) =>
+  [...plotData.data].sort((a, b) => {
+    const cmp = compareCells(a[column], b[column]);
+    return ascending ? cmp : -cmp;
+  });
+
+/**
+ * Sort the rows for the initial display. A saved view `order`
+ * ({column: <name>, ascending: <bool>}) takes precedence; otherwise the
+ * `default_order_column` (a column name or index) and `default_order_ascending`
+ * metadata keys are used, defaulting to the first column ascending. Grid.js
+ * then handles the interactive sorting from this initial order.
+ */
+const orderTableData = (plotData, order) => {
+  let column = 0;
+  const orderColumn = plotData.default_order_column;
+  if (typeof orderColumn === 'string') {
+    const idx = plotData.columns.indexOf(orderColumn);
+    column = idx >= 0 ? idx : 0;
+  } else if (typeof orderColumn === 'number') {
+    column = orderColumn;
+  }
+  let ascending = plotData.default_order_ascending !== false;
+
+  if (order && order.column != null) {
+    const idx = plotData.columns.indexOf(order.column);
+    if (idx >= 0) {
+      column = idx;
+      ascending = order.ascending !== false;
+    }
+  }
+
+  tableAppliedOrder = {column: plotData.columns[column], ascending};
+  return sortRows(plotData, column, ascending);
+}
+
+/**
+ * Read the current sort (column name + direction) from the Grid.js header, or
+ * null when no column is sorted. Grid.js tags the active sort button with
+ * `gridjs-sort-asc` / `gridjs-sort-desc`.
+ */
+const getTableOrder = () => {
+  for (const th of document.querySelectorAll('#table_container .gridjs-th')) {
+    const btn = th.querySelector('.gridjs-sort');
+    if (!btn) continue;
+    const name = th.querySelector('.gridjs-th-content')?.textContent.trim();
+    if (btn.classList.contains('gridjs-sort-asc')) {
+      return {column: name, ascending: true};
+    }
+    if (btn.classList.contains('gridjs-sort-desc')) {
+      return {column: name, ascending: false};
+    }
+  }
+  // Grid.js reports a neutral sort: fall back to the order the table was built
+  // with (default or restored from a view).
+  return tableAppliedOrder;
+}
+
+function renderTable() {
+
+  let table_container = document.getElementById('table_container');
+  show(table_container);
+
+  const plotData = getPlotData();
+  if (!plotData || !plotData.columns || !plotData.data) {
+    table_container.innerHTML = "<div>No data available</div>";
+    tableGrid = null;
+    tableGridKey = null;
+    return;
+  }
+
+  const gridKey = [state().plot_kind, ...plotData.columns].join('|');
+  if (tableGrid && tableGridKey === gridKey && !tablePendingView) {
+    // Same table: refresh in place (e.g. after a precision change), keeping
+    // the current sorting. The formatters read the global precision.
+    document.getElementById('table-precision-label').innerText =
+      `Float Precision: ${tableFloatPrecision}`;
+    tableGrid.forceRender();
+    return;
+  }
+
+  table_container.innerHTML = "";
+
+  // Restore the hidden columns / order from a saved view when one is being
+  // loaded, otherwise start fresh with the table's default order.
+  tableHiddenColumns = new Set();
+  if (tablePendingView && Array.isArray(tablePendingView.hidden)) {
+    const valid = tablePendingView.hidden.filter(c => plotData.columns.includes(c));
+    // Never hide every column.
+    if (valid.length < plotData.columns.length) {
+      valid.forEach(c => tableHiddenColumns.add(c));
+    }
+  }
+  const orderedData = orderTableData(plotData, tablePendingView && tablePendingView.order);
+  tablePendingView = null;
+
+  // Grid.js table with sortable columns and a search bar
+  const card = document.createElement("div");
+  card.className = "w-full bg-white overflow-hidden mx-auto";
+
+  const buildColumns = () => plotData.columns.map(name => ({
+    name,
+    hidden: tableHiddenColumns.has(name),
+    sort: { compare: compareCells },
+    formatter: (value) => valueToFixed(value),
+  }));
+
+  tableGrid = new gridjs.Grid({
+    columns: buildColumns(),
+    data: orderedData,
+    sort: true,
+    search: true,
+  });
+  tableGrid.render(card);
+  tableGridKey = gridKey;
+
+  // Pill-shaped toggles to show/hide each column
+  const columnsContainer = document.createElement("div");
+  columnsContainer.className = "flex items-center flex-wrap px-4 pt-4";
+
+  const columnsLabel = document.createElement("span");
+  columnsLabel.innerText = "Columns:";
+  columnsLabel.className = "mr-4 text-sm font-medium text-gray-700";
+  columnsContainer.appendChild(columnsLabel);
+
+  const setPillStyle = (pill, visible, name) => {
+    const base = "inline-flex items-center px-3 py-1 mr-4 mt-1 rounded-full " +
+      "text-sm font-medium cursor-pointer transition-all border ";
+    if (visible) {
+      pill.className = base +
+        "border-transparent bg-blue-600 text-white hover:bg-blue-700";
+      pill.innerText = `✓ ${name}`;
+    } else {
+      pill.className = base +
+        "border-gray-300 bg-white text-gray-500 hover:bg-gray-100";
+      pill.innerText = name;
+    }
+  };
+
+  plotData.columns.forEach(name => {
+    const label = document.createElement("label");
+    const visible = !tableHiddenColumns.has(name);
+
+    const checkbox = document.createElement("input");
+    checkbox.type = "checkbox";
+    checkbox.checked = visible;
+    checkbox.className = "sr-only";
+
+    const pill = document.createElement("span");
+    setPillStyle(pill, visible, name);
+    pill.title = "Show/hide column";
+
+    checkbox.onchange = () => {
+      if (checkbox.checked) {
+        tableHiddenColumns.delete(name);
+      } else if (tableHiddenColumns.size === plotData.columns.length - 1) {
+        // Keep at least one column visible
+        checkbox.checked = true;
+        return;
+      } else {
+        tableHiddenColumns.add(name);
+      }
+      setPillStyle(pill, checkbox.checked, name);
+      tableGrid.updateConfig({ columns: buildColumns() }).forceRender();
+    };
+
+    label.appendChild(checkbox);
+    label.appendChild(pill);
+    columnsContainer.appendChild(label);
+  });
+
+  // Footer with Precision Controls & Export
+  const footerWrapper = document.createElement("div");
+  footerWrapper.className = "w-full";
+
+  const footer = document.createElement("div");
+  footer.className = "flex justify-between items-center p-4";
+
+  // Precision Controls (Left)
+  const precisionContainer = document.createElement("div");
+  precisionContainer.className = "flex items-center gap-2 text-sm text-gray-700";
+
+  const createPrecBtn = (text) => {
+    const btn = document.createElement("button");
+    btn.innerText = text;
+    btn.className = "px-3 py-1 border border-gray-300 bg-white rounded cursor-pointer hover:bg-gray-100";
+    return btn;
+  };
+
+  const btnDec = createPrecBtn("-");
+  const btnInc = createPrecBtn("+");
+  const labelPrec = document.createElement("span");
+  labelPrec.id = "table-precision-label";
+  labelPrec.innerText = `Float Precision: ${tableFloatPrecision}`;
+  labelPrec.className = "mx-2 px-4";
+
+  btnDec.onclick = () => {
+    if (tableFloatPrecision > 0) {
+      tableFloatPrecision--;
+      renderTable();
+    }
+  };
+
+  btnInc.onclick = () => {
+    tableFloatPrecision++;
+    renderTable();
+  };
+
+  precisionContainer.appendChild(btnDec);
+  precisionContainer.appendChild(labelPrec);
+  precisionContainer.appendChild(btnInc);
+
+  // Export Button (Right)
+  const exportButton = document.createElement("button");
+  exportButton.id = "table-export";
+  exportButton.innerText = "Export LaTeX";
+  exportButton.className = "inline-flex items-center px-4 py-2 space-x-2 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500";
+
+  exportButton.addEventListener('click', () => {
+    exportTable();
+  });
+
+  table_container.appendChild(card);
+
+  footer.appendChild(precisionContainer);
+  footer.appendChild(exportButton);
+  footerWrapper.appendChild(columnsContainer);
+  footerWrapper.appendChild(footer);
+  table_container.appendChild(footerWrapper);
+}
+
+
+async function exportTable() {
+  const button = document.getElementById("table-export");
+  const defaultText = button.innerHTML;
+  button.innerHTML = "Copying";
+
+  // Export the table as displayed in the Grid.js table, so that the LaTeX
+  // output matches the current sorting, search filter, visible columns and
+  // float precision.
+  const displayedColumns = Array.from(
+    document.querySelectorAll('#table_container .gridjs-th-content'),
+    el => el.textContent.trim()
+  );
+  const displayedRows = Array.from(
+    document.querySelectorAll('#table_container .gridjs-table tbody tr')
+  ).map(tr => Array.from(tr.querySelectorAll('td'), td => td.innerText));
+
+  let value = "\\begin{tabular}{l";
+  value += "c".repeat(displayedColumns.length);
+  value += "}\n";
+  value += "\\hline\n";
+
+  value += displayedColumns[0].replace('_', '\\_');
+  displayedColumns.slice(1).forEach(metric => value += ` & ${metric.replace('_', '\\_')}`);
+
+  value += " \\\\\n";
+  value += "\\hline\n";
+
+  displayedRows.forEach(rowData => {
+    value += rowData[0].replace('_', '\\_');
+    rowData.slice(1).forEach(cell => {
+      value += ` & ${cell.replace('_', '\\_')}`;
+    });
+    value += " \\\\\n";
+  });
+
+  value += "\\hline\n";
+  value += "\\end{tabular}";
+
+  try {
+    await navigator.clipboard.writeText(value);
+    button.innerHTML = "Copied in clipboard!";
+    setTimeout(() => button.innerHTML = defaultText, 2500);
+  } catch (err) {
+    button.innerHTML = "Error!";
+    setTimeout(() => button.innerHTML = defaultText, 2500);
+  }
+}
+
 /*
  * ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
  * MANAGE PLOT LEGEND
@@ -879,15 +1423,10 @@ const handleCurveDoubleClick = curve => {
  * Creates the legend at the bottom of the plot.
  */
 const renderLegend = () => {
-  const legendContainer = document.getElementById('legend_container')
-  if (!isChart('scatter')) {
-    hide(legendContainer);
-    return;
-  } else {
-    show(legendContainer);
-  }
 
+  const container = document.getElementById('legend_container');
   const legend = document.getElementById('plot_legend');
+  show(container);
 
   legend.innerHTML = '';
   const curvesDescription = window.metadata["solvers_description"];

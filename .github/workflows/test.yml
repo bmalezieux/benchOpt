@@ -50,9 +50,9 @@ jobs:
         shell: ${{ matrix.os == 'windows-latest' && 'cmd /C CALL {0}' || 'bash -l {0}' }}
 
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
       - name: Setup Conda
-        uses: conda-incubator/setup-miniconda@v3
+        uses: conda-incubator/setup-miniconda@v4
         with:
           activate-environment: ${{ env.CONDA_ENV }}
           python-version: ${{ matrix.version_python }}
@@ -60,10 +60,6 @@ jobs:
           miniforge-version: latest
 
       - run: conda info
-
-      - name: Install Julia
-        run:
-          ${{ env.BENCHOPT_CONDA_CMD }} install -yq -c https://repo.prefix.dev/julia-forge julia[version=">=1.10.0"]
 
       - name: Install benchopt and its dependencies on POSIX systems
         if: matrix.os != 'windows-latest'
@@ -95,7 +91,7 @@ jobs:
 
       - name: Upload coverage
         if: ${{ matrix.coverage == 'true' }}
-        uses: codecov/codecov-action@v5
+        uses: codecov/codecov-action@v6
         env:
           CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
         with:
@@ -119,7 +115,7 @@ jobs:
       VERSION_PYTHON: ${{ matrix.version_python }}
 
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
       - uses: actions/setup-python@v6
         with:
           python-version: ${{ env.VERSION_PYTHON }}
@@ -135,9 +131,9 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
       - name: Setup Conda
-        uses: conda-incubator/setup-miniconda@v3
+        uses: conda-incubator/setup-miniconda@v4
         with:
           activate-environment: 'testcondaenv'
           python-version: 3.12
@@ -163,7 +159,7 @@ jobs:
           - version_python: "3.11"
             version_pip: "latest"
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
       - uses: actions/setup-python@v6
         with:
           python-version: ${{ matrix.version_python }}

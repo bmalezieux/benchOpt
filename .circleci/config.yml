@@ -2,7 +2,7 @@ version: 2
 jobs:
   build_docs:
     docker:
-      - image: cimg/python:3.10-browsers
+      - image: cimg/base:current
     steps:
       - checkout
       - restore_cache:
@@ -15,18 +15,22 @@ jobs:
 
             wget -q https://github.com/conda-forge/miniforge/releases/latest/download/Miniforge3-$(uname)-$(uname -m).sh -O ~/miniconda.sh;
             chmod +x ~/miniconda.sh;
+            rm ~/miniconda/_conda || echo "does not exist";
             ~/miniconda.sh -u -b -p ~/miniconda;
             echo "export PATH=~/miniconda/bin:$PATH" >> $BASH_ENV;
 
       - run:
           name: Get Python running
           command: |
+            source ~/miniconda/etc/profile.d/conda.sh
             # remove the cache index
             mamba clean -i -y
-            mamba install python=3.10 r-base rpy2 \
-                          numpy cython -yq
-            pip install --upgrade "setuptools<58.5"
+            mamba create -n benchopt-docs python=3.12 -yq
+            conda activate benchopt-docs
             pip install --upgrade --progress-bar off -e .[doc]
+            # Make sure the environment is used in subsequent steps
+            echo "source ~/miniconda/etc/profile.d/conda.sh" >> $BASH_ENV
+            echo "conda activate benchopt-docs" >> $BASH_ENV
 
       - save_cache:
           key: pkgs-cache
@@ -39,11 +43,12 @@ jobs:
           name: Check installation
           command: |
             which python
+            python -c "import numpy; print(numpy.__version__)"
             python -c "import benchopt"
 
       # Build docs
       - run:
-          name: make html
+          name: Make html
           no_output_timeout: 20m
           command: |
             cd doc;
@@ -59,7 +64,7 @@ jobs:
             - html
 
       - run:
-          name: make result
+          name: Make result
           command: |
             pip install -U numba
             benchopt run examples/minimal_benchmark -r 5 -n 25 --output benchmark-result
@@ -71,7 +76,7 @@ jobs:
 
   deploy:
     docker:
-      - image: cimg/python:3.10-browsers
+      - image: cimg/base:current
     steps:
       - attach_workspace:
           at: /tmp/build
@@ -97,10 +102,10 @@ jobs:
             git config --global user.email "circle@benchopt.com";
             git config --global user.name "Circle CI";
 
-            if [ "$CIRCLE_BRANCH" == "main" ]; then
-                DEST="dev"
-            elif [ -n "$CIRCLE_TAG" ]; then
+            if [ -n "$CIRCLE_TAG" ]; then
                 DEST="$CIRCLE_TAG"
+            elif [ "$CIRCLE_BRANCH" == "main" ]; then
+                DEST="dev"
             else
                 echo "Should not trigger deploy outside main branch or a tag"
                 exit 1
@@ -140,7 +145,10 @@ workflows:
 
   default:
     jobs:
-      - build_docs
+      - build_docs:
+          filters:  # required as `deploy` needs tag AND requires `build_docs`
+            tags:
+              only: /.*/
       - deploy:
           requires:
             - build_docs
