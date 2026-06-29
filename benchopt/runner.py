@@ -256,8 +256,6 @@ def run_one_solver(benchmark, dataset, objective, solver, n_repetitions,
             terminal.skip(reason)
             return []
 
-        terminal.set(rep=rep)
-
         # Get meta
         meta = {
             'objective_name': str(objective),
